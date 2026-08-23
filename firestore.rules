@@ -1,0 +1,36 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Only these two accounts may read anything at all.
+    function isAllowedReader() {
+      return isSignedIn() &&
+        request.auth.token.email in ['anushansiv@gmail.com', 'contactsivanathan@gmail.com'];
+    }
+
+    // Only this account may write.
+    function isEnterer() {
+      return isSignedIn() && request.auth.token.email == 'anushansiv@gmail.com';
+    }
+
+    match /accounts/{accountId} {
+      allow read: if isAllowedReader();
+      allow write: if isEnterer();
+    }
+
+    match /entries/{entryId} {
+      allow read: if isAllowedReader();
+      allow write: if isEnterer();
+    }
+
+    // Deny everything else by default (implicit, but explicit for clarity).
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
