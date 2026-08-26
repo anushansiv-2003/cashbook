@@ -105,6 +105,19 @@ svg { display: block; }
 .print-only { display: none; }
 .hidden { display: none !important; }
 
+/* ---------------- boot ---------------- */
+.boot-screen {
+  height: 100dvh; height: 100vh;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg);
+}
+.boot-spinner {
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 3px solid var(--border); border-top-color: var(--accent);
+  animation: boot-spin 0.7s linear infinite;
+}
+@keyframes boot-spin { to { transform: rotate(360deg); } }
+
 /* ---------------- login ---------------- */
 .login-screen {
   height: 100dvh; height: 100vh;
@@ -167,8 +180,8 @@ svg { display: block; }
 .banner svg { flex: none; margin-top: 1px; color: var(--warn); }
 
 .views { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-.view { display: none; padding: 16px 16px calc(env(safe-area-inset-bottom, 0px) + 28px); }
-.view.active { display: block; }
+.view { display: none; min-height: 100%; padding: 16px 16px calc(env(safe-area-inset-bottom, 0px) + 28px); }
+.view.active { display: flex; flex-direction: column; }
 
 .tabbar {
   flex: none; display: flex; border-top: 1px solid var(--border); background: var(--surface);
@@ -250,7 +263,21 @@ h2.section-title { font-size: 13px; font-weight: 700; color: var(--text-secondar
 .btn-secondary:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn-row { display: flex; gap: 8px; }
 
-.recent-block { margin-top: 26px; }
+#addEditor { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.recent-block {
+  margin-top: 26px;
+  flex: 1;
+  min-height: 140px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px 14px calc(env(safe-area-inset-bottom, 0px) + 14px);
+}
+.recent-block .section-title { margin: 0 2px 8px; }
+.recent-block #recentList { flex: 1; overflow-y: auto; display: flex; flex-direction: column; -webkit-overflow-scrolling: touch; }
+.recent-empty { margin: auto; text-align: center; font-size: 12.5px; color: var(--text-muted); }
 .recent-row { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 1px solid var(--border); }
 .recent-row:last-child { border-bottom: none; }
 .recent-row .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }

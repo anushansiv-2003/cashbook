@@ -4,8 +4,9 @@ import {
   signInWithEmailAndPassword, signOut
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
 import {
-  getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot,
-  serverTimestamp, query, orderBy, enableIndexedDbPersistence
+  initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
+  collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot,
+  serverTimestamp, query, orderBy
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config.js";
 
@@ -15,9 +16,17 @@ import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config
   /* ---------------- firebase init ---------------- */
   const fbApp = initializeApp(firebaseConfig);
   const auth = getAuth(fbApp);
-  const db = getFirestore(fbApp);
+  // Persistent, multi-tab-safe offline cache: entries/accounts you add while
+  // offline are queued durably (survive a reload or app relaunch) and sync
+  // automatically once the connection comes back — and it stays correct even
+  // if the app is open in more than one tab/window at once (installed PWA +
+  // a browser tab, for example), which the older single-tab persistence API
+  // could silently lose, causing exactly the "duplicated then vanished
+  // accounts, offline entries missing" symptoms.
+  const db = initializeFirestore(fbApp, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+  });
   setPersistence(auth, browserLocalPersistence).catch(function () {});
-  enableIndexedDbPersistence(db).catch(function () { /* multiple tabs open, or unsupported browser — fine, just no offline cache */ });
 
   /* ---------------- icons ---------------- */
   var ICONS = {
@@ -96,6 +105,7 @@ import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config
   var currentUser = null;
   var isEnterer = false;
   var unsubAccounts = null, unsubEntries = null;
+  var entriesLoaded = false;
 
   var currentType = safeLocal("cb-type", "out");
   if (currentType !== "in" && currentType !== "out") currentType = "out";
@@ -128,6 +138,7 @@ import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config
 
   /* ---------------- DOM refs ---------------- */
   var els = {
+    bootScreen: document.getElementById("bootScreen"),
     loginScreen: document.getElementById("loginScreen"),
     loginForm: document.getElementById("loginForm"),
     loginEmail: document.getElementById("loginEmail"),
@@ -204,6 +215,7 @@ import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config
   els.signOutBtn.addEventListener("click", function () { signOut(auth); });
 
   onAuthStateChanged(auth, function (user) {
+    els.bootScreen.classList.add("hidden");
     if (!user) {
       currentUser = null;
       teardownListeners();
@@ -214,6 +226,8 @@ import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config
     }
     if (ALLOWED_EMAILS.indexOf((user.email || "").toLowerCase()) === -1) {
       signOut(auth);
+      els.appShell.classList.add("hidden");
+      els.loginScreen.classList.remove("hidden");
       els.loginError.textContent = "This ledger isn't shared with that account.";
       els.loginError.classList.add("show");
       return;
@@ -223,38 +237,63 @@ import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config
     els.loginScreen.classList.add("hidden");
     els.appShell.classList.remove("hidden");
     els.roleText.textContent = isEnterer ? "Editor" : "Viewer";
-    els.rolePill.setAttribute("data-state", isEnterer ? "idle" : "viewer");
+    setOfflineBanner(!navigator.onLine);
     els.addAccountCard.classList.toggle("hidden", !isEnterer);
     switchTab(isEnterer ? "add" : "ledger");
     startListeners();
   });
 
   /* ---------------- online/offline ---------------- */
-  window.addEventListener("online", function () { if (currentUser) els.rolePill.setAttribute("data-state", isEnterer ? "idle" : "viewer"); });
-  window.addEventListener("offline", function () { showBanner(ICONS.warn + "<span>You're offline — changes will sync once you're back online.</span>"); });
+  function setOfflineBanner(isOffline) {
+    if (isOffline) {
+      showBanner(ICONS.warn + "<span>You're offline — entries you add now are saved and will sync once you're back online.</span>");
+    } else {
+      hideBanner();
+    }
+    if (currentUser) els.rolePill.setAttribute("data-state", isOffline ? "offline" : (isEnterer ? "idle" : "viewer"));
+  }
+  window.addEventListener("online", function () { setOfflineBanner(false); });
+  window.addEventListener("offline", function () { setOfflineBanner(true); });
+  if (!navigator.onLine) setOfflineBanner(true);
 
   /* ---------------- firestore listeners ---------------- */
   function startListeners() {
     teardownListeners();
     unsubAccounts = onSnapshot(query(collection(db, "accounts"), orderBy("order")), function (snap) {
       accounts = snap.docs.map(function (d) { return Object.assign({ id: d.id }, d.data()); });
-      if (!accounts.length && isEnterer) { seedDefaultAccounts(); return; }
+      // Only auto-create the starter "Cash"/"Bank" accounts once we have a
+      // server-confirmed empty result — never off a snapshot that's merely
+      // serving from local cache (e.g. offline, or before the first
+      // real round-trip completes), which previously could re-seed
+      // duplicate accounts on every reload while offline.
+      if (!accounts.length && isEnterer && !snap.metadata.fromCache) { seedDefaultAccounts(); return; }
       ensureValidAccountRefs();
       renderAll();
     }, function (err) { handleListenerError(err); });
 
     unsubEntries = onSnapshot(collection(db, "entries"), function (snap) {
+      if (entriesLoaded) {
+        snap.docChanges().forEach(function (change) {
+          if (change.type !== "added") return;
+          var data = change.doc.data();
+          if (currentUser && data.createdBy && data.createdBy === currentUser.email) return; // already toasted locally on submit
+          var acct = accountById(data.accountId);
+          var label = data.type === "in" ? "Cash in" : "Cash out";
+          showToast(label + " added · " + fmtMoney(data.amount) + (acct ? " · " + acct.name : ""));
+        });
+      }
       entries = snap.docs.map(function (d) {
         var data = d.data({ serverTimestamps: "estimate" });
         return Object.assign({ id: d.id, _createdAtMs: data.createdAt && data.createdAt.toMillis ? data.createdAt.toMillis() : null }, data);
       });
+      entriesLoaded = true;
       renderAll();
     }, function (err) { handleListenerError(err); });
   }
   function teardownListeners() {
     if (unsubAccounts) { unsubAccounts(); unsubAccounts = null; }
     if (unsubEntries) { unsubEntries(); unsubEntries = null; }
-    accounts = []; entries = [];
+    accounts = []; entries = []; entriesLoaded = false;
   }
   function handleListenerError(err) {
     if (err && err.code === "permission-denied") return; // expected mid sign-out
@@ -356,7 +395,7 @@ import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config
     if (!isEnterer) return;
     var scoped = entriesForAccount(addAccountId).slice().sort(function (a, b) { return orderKey(a) > orderKey(b) ? -1 : 1; }).slice(0, 5);
     if (!scoped.length) {
-      els.recentList.innerHTML = '<p style="font-size:12.5px;color:var(--text-muted);">Nothing added yet for this account.</p>';
+      els.recentList.innerHTML = '<p class="recent-empty">Nothing added yet for this account.</p>';
       return;
     }
     els.recentList.innerHTML = scoped.map(function (en) {
@@ -512,8 +551,8 @@ import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config
     }
     if (accounts.length >= 8) { showToast("You can have up to 8 accounts."); return; }
     els.newAccountInput.value = "";
+    showToast("Added account “" + name + "”" + (navigator.onLine ? "" : " (will sync when online)"));
     addDoc(collection(db, "accounts"), { name: name, order: accounts.length, createdAt: serverTimestamp() })
-      .then(function () { showToast("Added account “" + name + "”"); })
       .catch(function (err) { showToast(friendlyError(err, "Couldn't add the account.")); });
   }
   els.addAccountBtn.addEventListener("click", function () { addAccount(els.newAccountInput.value); });
@@ -531,6 +570,9 @@ import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config
     var accEntries = entriesForAccount(id);
     if (accEntries.length > 0) { showToast("Can't delete — this account has entries."); return; }
     if (accounts.length <= 1) { showToast("You need at least one account."); return; }
+    var acct = accountById(id);
+    var name = acct ? acct.name : "this account";
+    if (!window.confirm("Delete account “" + name + "”? This can't be undone.")) return;
     deleteDoc(doc(db, "accounts", id))
       .then(function () { showToast("Account deleted"); })
       .catch(function (err) { showToast(friendlyError(err, "Couldn't delete the account.")); });
@@ -732,8 +774,12 @@ import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config
     els.dateInput.value = todayStr();
     els.timeInput.value = nowTimeStr();
     els.amountInput.focus();
+    // Show confirmation immediately rather than waiting on the addDoc()
+    // promise — that promise only resolves once the server acknowledges
+    // the write, which while offline could be a long time away, even
+    // though the entry is already saved locally and visible in the list.
+    showToast((payload.type === "in" ? "Added cash in" : "Added cash out") + " · " + fmtMoney(payload.amount) + (navigator.onLine ? "" : " (will sync when online)"));
     addDoc(collection(db, "entries"), payload)
-      .then(function () { showToast((payload.type === "in" ? "Added cash in" : "Added cash out") + " · " + fmtMoney(payload.amount)); })
       .catch(function (err) { showToast(friendlyError(err, "Couldn't save that entry.")); });
   });
 
@@ -776,6 +822,7 @@ import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config
   }
 
   function showBanner(html) { els.banner.innerHTML = html; els.banner.classList.add("show"); }
+  function hideBanner() { els.banner.classList.remove("show"); els.banner.innerHTML = ""; }
 
   /* ---------------- viewer notice ---------------- */
   function renderViewerNotice() {
