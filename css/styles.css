@@ -178,6 +178,13 @@ svg { display: block; }
 }
 .banner.show { display: flex; }
 .banner svg { flex: none; margin-top: 1px; color: var(--warn); }
+.banner span { flex: 1; align-self: center; }
+.banner button {
+  flex: none; border: none; background: var(--accent); color: var(--accent-contrast);
+  font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 100px; cursor: pointer;
+}
+.banner[data-kind="info"] { background: var(--surface-2); }
+.banner[data-kind="info"] svg { color: var(--accent-strong); }
 
 .views { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .view { display: none; min-height: 100%; padding: 16px 16px calc(env(safe-area-inset-bottom, 0px) + 28px); }

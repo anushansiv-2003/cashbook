@@ -5,10 +5,13 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
-  collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot,
+  collection, doc, addDoc, updateDoc, deleteDoc, setDoc, onSnapshot,
   serverTimestamp, query, orderBy
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
-import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config.js";
+import {
+  getMessaging, getToken, onMessage, isSupported as isMessagingSupported
+} from "https://www.gstatic.com/firebasejs/12.18.0/firebase-messaging.js";
+import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS, VAPID_KEY } from "./firebase-config.js";
 
 (function () {
   "use strict";
@@ -212,7 +215,10 @@ import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config
     });
   });
 
-  els.signOutBtn.addEventListener("click", function () { signOut(auth); });
+  els.signOutBtn.addEventListener("click", function () {
+    forgetPushToken();
+    signOut(auth);
+  });
 
   onAuthStateChanged(auth, function (user) {
     els.bootScreen.classList.add("hidden");
@@ -241,6 +247,7 @@ import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config
     els.addAccountCard.classList.toggle("hidden", !isEnterer);
     switchTab(isEnterer ? "add" : "ledger");
     startListeners();
+    initPush();
   });
 
   /* ---------------- online/offline ---------------- */
@@ -304,6 +311,67 @@ import { firebaseConfig, ENTERER_EMAIL, ALLOWED_EMAILS } from "./firebase-config
       addDoc(collection(db, "accounts"), { name: "Cash", order: 0, createdAt: serverTimestamp() }),
       addDoc(collection(db, "accounts"), { name: "Bank", order: 1, createdAt: serverTimestamp() })
     ]).catch(function () {});
+  }
+
+  /* ---------------- push notifications ---------------- */
+  // Lets every allowed device get a real system notification the moment
+  // *anyone* adds an entry — like the old WhatsApp habit — without needing
+  // the app open. Each signed-in device registers a token in the
+  // `pushTokens` collection; a Cloud Function (see /functions) watches for
+  // new `entries` docs and pushes to every token found there.
+  var currentPushToken = null;
+
+  function savePushToken(token) {
+    if (!token || !currentUser || token === currentPushToken) return;
+    currentPushToken = token;
+    setDoc(doc(db, "pushTokens", token), {
+      email: currentUser.email, updatedAt: serverTimestamp()
+    }).catch(function () {});
+  }
+
+  function forgetPushToken() {
+    if (!currentPushToken) return;
+    var token = currentPushToken;
+    currentPushToken = null;
+    deleteDoc(doc(db, "pushTokens", token)).catch(function () {});
+  }
+
+  function initPush() {
+    if (!("Notification" in window) || !("serviceWorker" in navigator)) return;
+    if (!VAPID_KEY || VAPID_KEY.indexOf("PASTE_") === 0) return; // not configured yet
+    isMessagingSupported().then(function (supported) {
+      if (!supported) return;
+      navigator.serviceWorker.ready.then(function (reg) {
+        var messaging = getMessaging(fbApp);
+        function requestAndSave() {
+          getToken(messaging, { vapidKey: VAPID_KEY, serviceWorkerRegistration: reg })
+            .then(savePushToken)
+            .catch(function () {});
+        }
+        if (Notification.permission === "granted") {
+          requestAndSave();
+        } else if (Notification.permission === "default") {
+          showBanner(
+            ICONS.warn + '<span>Get notified the moment an entry is added — even with the app closed.</span>' +
+            '<button type="button" id="enableNotifBtn">Enable</button>'
+          );
+          els.banner.setAttribute("data-kind", "info");
+          var btn = document.getElementById("enableNotifBtn");
+          if (btn) btn.addEventListener("click", function () {
+            Notification.requestPermission().then(function (perm) {
+              hideBanner();
+              els.banner.removeAttribute("data-kind");
+              if (perm === "granted") requestAndSave();
+            });
+          });
+        }
+        // Foreground messages: the live Firestore listener above already
+        // toasts new entries in real time while the app is open, so there's
+        // nothing extra to do here — this exists only so onMessage doesn't
+        // throw if a foreground push ever arrives.
+        onMessage(messaging, function () {});
+      });
+    }).catch(function () {});
   }
 
   /* ---------------- tab navigation ---------------- */

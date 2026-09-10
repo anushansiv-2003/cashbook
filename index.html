@@ -14,7 +14,16 @@
 <meta name="apple-mobile-web-app-title" content="Cashbook" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+<!-- Sora is only ever used at weight 700 in this app; dropping the unused 600
+     cuts one font-file download on every cold load. -->
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<!-- Kick off fetching the Firebase SDK chunks in parallel with everything else,
+     instead of waiting until the parser reaches the <script type="module"> below. -->
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js" crossorigin="anonymous">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js" crossorigin="anonymous">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js" crossorigin="anonymous">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/12.18.0/firebase-messaging.js" crossorigin="anonymous">
 <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>

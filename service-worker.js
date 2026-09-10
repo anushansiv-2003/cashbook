@@ -1,10 +1,23 @@
-// Minimal service worker — exists only so the browser considers Cashbook
-// an installable PWA. It caches the static app shell (HTML/CSS/JS/icons)
-// so the app can at least open when offline; it deliberately does NOT
-// intercept Firebase/Firestore requests, so your live data always comes
-// straight from the network.
+// Cashbook service worker
+//
+// Strategy: stale-while-revalidate for everything cacheable — answer instantly
+// from cache if we have it, and refresh the cache from the network in the
+// background for next time. That applies to:
+//   - the app shell (HTML/CSS/JS/icons)
+//   - the Firebase SDK + Google Fonts files pulled from CDNs (their URLs are
+//     version-pinned, so caching them aggressively is safe — "download once",
+//     not "download every time you open the app")
+//
+// Firebase Auth / Firestore network calls are NEVER intercepted — your live
+// ledger data always comes straight from the network (or Firestore's own
+// offline cache), never from this service worker.
+//
+// This file also owns push notifications: showing a system notification when
+// a push arrives (even if Cashbook isn't open), and focusing/opening the app
+// when one is tapped.
 
-const CACHE_NAME = "cashbook-shell-v1";
+const CACHE_NAME = "cashbook-shell-v2";
+const RUNTIME_CACHE = "cashbook-runtime-v2";
 
 const APP_SHELL = [
   "./",
@@ -19,6 +32,14 @@ const APP_SHELL = [
   "./apple-touch-icon.png"
 ];
 
+// Cross-origin hosts we're allowed to cache. Both serve long-lived,
+// version/hash-pinned URLs, so caching them doesn't risk staleness.
+const CACHEABLE_CROSS_ORIGIN = [
+  "https://www.gstatic.com/firebasejs/",
+  "https://fonts.googleapis.com/",
+  "https://fonts.gstatic.com/"
+];
+
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).catch(() => {})
@@ -29,33 +50,70 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((names) =>
-      Promise.all(names.filter((n) => n !== CACHE_NAME).map((n) => caches.delete(n)))
+      Promise.all(names.filter((n) => n !== CACHE_NAME && n !== RUNTIME_CACHE).map((n) => caches.delete(n)))
     )
   );
   self.clients.claim();
 });
 
+function staleWhileRevalidate(req, cacheName) {
+  return caches.open(cacheName).then((cache) =>
+    cache.match(req).then((cached) => {
+      const networkFetch = fetch(req)
+        .then((res) => {
+          if (res && res.ok) cache.put(req, res.clone());
+          return res;
+        })
+        .catch(() => cached);
+      // Cached response wins immediately when we have one; the network
+      // fetch still runs (above) to keep the cache fresh for next time.
+      return cached || networkFetch;
+    })
+  );
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
-
-  // Only handle same-origin GET requests for files in our app shell.
-  // Everything else (Firebase Auth, Firestore, Google Fonts, etc.)
-  // passes straight through untouched.
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return;
 
-  const path = "." + url.pathname.replace(/^\/[^/]*\.github\.io\//, "/").replace(/\/$/, "/index.html");
-  const isShellRequest = APP_SHELL.some((p) => url.pathname.endsWith(p.replace("./", "/")) || url.pathname === "/" );
-  if (!isShellRequest) return;
+  if (url.origin === self.location.origin) {
+    const isShellRequest = APP_SHELL.some((p) => url.pathname.endsWith(p.replace("./", "/"))) || url.pathname === "/";
+    if (isShellRequest) event.respondWith(staleWhileRevalidate(req, CACHE_NAME));
+    return;
+  }
 
-  event.respondWith(
-    fetch(req)
-      .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(() => {});
-        return res;
-      })
-      .catch(() => caches.match(req))
+  if (CACHEABLE_CROSS_ORIGIN.some((prefix) => req.url.startsWith(prefix))) {
+    event.respondWith(staleWhileRevalidate(req, RUNTIME_CACHE));
+  }
+  // Everything else (Firebase Auth, Firestore, etc.) passes straight through.
+});
+
+/* ---------------- push notifications ---------------- */
+self.addEventListener("push", (event) => {
+  if (!event.data) return;
+  let payload;
+  try { payload = event.data.json(); } catch (e) { return; }
+  const notif = payload.notification || {};
+  const title = notif.title || "Cashbook";
+  const options = {
+    body: notif.body || "",
+    icon: "./icon-192.png",
+    badge: "./icon-192.png",
+    data: payload.data || {},
+    tag: (payload.data && payload.data.entryId) || undefined
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if ("focus" in client) return client.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow("./");
+    })
   );
 });

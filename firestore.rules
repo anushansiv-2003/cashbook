@@ -28,6 +28,17 @@ service cloud.firestore {
       allow write: if isEnterer();
     }
 
+    // One doc per registered device, keyed by its own push token, so a
+    // device can only ever create/update/delete its own registration.
+    // The Cloud Function that reads this collection uses the Admin SDK,
+    // which bypasses these rules entirely — no client is ever allowed to
+    // read the full token list.
+    match /pushTokens/{token} {
+      allow read: if false;
+      allow create, update: if isAllowedReader() && request.resource.data.email == request.auth.token.email;
+      allow delete: if isAllowedReader() && resource.data.email == request.auth.token.email;
+    }
+
     // Deny everything else by default (implicit, but explicit for clarity).
     match /{document=**} {
       allow read, write: if false;
