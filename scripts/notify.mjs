@@ -153,7 +153,6 @@ function formatMoney(n) {
 
 /* ---------------- main ---------------- */
 
-
 async function main() {
   const token = await getAccessToken();
   const cursor = await getCursor(token);
@@ -184,8 +183,12 @@ async function main() {
   }
 
   const tokens = await listCollection(token, "pushTokens");
-  if (tokens.length) {
+  console.log(`Registered devices: ${tokens.length}`);
+  if (!tokens.length) {
+    console.log("No devices are registered to receive pushes yet — nothing to send. (Did 'Enable' on a device actually finish registering? See app.js console for errors.)");
+  } else {
     const accounts = await listCollection(token, "accounts");
+    let sent = 0, failed = 0;
     for (const en of entries) {
       const acct = accounts.find((a) => a.id === en.accountId);
       const title = (en.type === "in" ? "Cash in" : "Cash out") + " · " + (acct ? acct.name : "Cashbook");
@@ -193,11 +196,18 @@ async function main() {
       const body = sign + formatMoney(en.amount) + (en.description ? " — " + en.description : "");
       for (const t of tokens) {
         const result = await sendPush(token, t.id, title, body, { entryId: en.id, accountId: en.accountId || "" });
-        if (!result.ok && (result.status === "UNREGISTERED" || result.status === "NOT_FOUND")) {
-          await deletePushToken(token, t.id);
+        if (result.ok) {
+          sent++;
+        } else {
+          failed++;
+          console.log(`  FAILED for token ${t.id.slice(0, 12)}...: ${result.status || "unknown error"}`);
+          if (result.status === "UNREGISTERED" || result.status === "NOT_FOUND") {
+            await deletePushToken(token, t.id);
+          }
         }
       }
     }
+    console.log(`Push results: ${sent} succeeded, ${failed} failed.`);
   }
 
   await setCursor(token, entries[entries.length - 1].createdAt);
