@@ -1,0 +1,35 @@
+name: Push new entries
+
+# Runs on a schedule, checks Firestore for anything new, and pushes via FCM.
+# No Cloud Functions, no billing plan — just this free scheduled job.
+#
+# This repo is public, so GitHub Actions minutes are unlimited/free — the
+# schedule below is set to every 5 minutes (GitHub's actual minimum interval
+# for scheduled workflows; anything shorter gets silently coalesced to 5 min
+# anyway). If this repo ever goes private, the free tier caps out at 2,000
+# Actions minutes/month — at one billed minute per run, 5-minute intervals
+# would use ~8,640 min/month, so widen the cron to "*/20 * * * *" or slower
+# at that point to stay free.
+#
+# Note: GitHub automatically disables scheduled workflows after 60 days with
+# no repository activity — push a commit (or re-enable it from the Actions
+# tab) if notifications quietly stop after a long quiet period.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {} # lets you trigger a run manually from the Actions tab
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check for new entries and push
+        env:
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          FIREBASE_PROJECT_ID: cashbook-957d0
+        run: node scripts/notify.mjs
